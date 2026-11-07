@@ -1,0 +1,67 @@
+category,name,value,type,description
+Body,body_width,8,float,px；Celeste normalHitbox 宽
+Body,stand_height,11,float,px；Celeste normalHitbox 高
+Body,duck_height,6,float,px；Celeste duckHitbox 高
+Movement,max_speed,90,float,px/s；Celeste MaxRun
+Movement,acceleration,1000,float,px/s²；Celeste RunAccel
+Movement,over_speed_decel,400,float,px/s²；Celeste RunReduce；超速同向时的衰减
+Movement,air_accel_mult,0.65,float,Celeste AirMult；无单位
+Movement,duck_friction,500,float,px/s²；Celeste DuckFriction
+Movement,duck_correct_check,4,int,px；Celeste DuckCorrectCheck；蹲下起不来时左右让位的探测距离
+Movement,duck_correct_slide,50,float,px/s；Celeste DuckCorrectSlide
+Jump,jump_speed,105,float,px/s 向上；Celeste JumpSpeed
+Jump,jump_speed_boost,40,float,px/s；Celeste JumpHBoost
+Jump,var_jump_time,0.2,float,秒；Celeste VarJumpTime；决定跳跃高度上限
+Jump,coyote_time,0.1,float,秒；Celeste JumpGraceTime
+Jump,jump_buffer_time,0.12,float,秒；跳跃输入缓存
+Jump,ceiling_var_jump_grace,0.05,float,秒；Celeste CeilingVarJumpGrace
+Gravity,gravity,900,float,px/s²；Celeste Gravity
+Gravity,max_fall_speed,160,float,px/s；Celeste MaxFall
+Gravity,fast_max_fall_speed,240,float,px/s；Celeste FastMaxFall；按住下方向的快速下落上限
+Gravity,fast_max_accel,300,float,px/s²；Celeste FastMaxAccel；下落上限本身的变化速率
+Gravity,half_gravity_threshold,40,float,px/s；Celeste HalfGravThreshold
+Dash,max_dashes,1,int,落地恢复
+Dash,dash_speed,240,float,px/s；Celeste DashSpeed
+Dash,dash_end_speed,160,float,px/s；Celeste EndDashSpeed；仅 dash_dir.y<=0 时写入
+Dash,end_dash_up_mult,0.75,float,Celeste EndDashUpMult；无单位
+Dash,dash_duration,0.15,float,秒；Celeste DashTime
+Dash,dash_freeze_time,0.05,float,秒；Celeste DashBegin 的 Freeze(.05)，冻结期可补按方向键；也是 Super/Hyper/Ultra 的输入窗口
+Dash,dash_cooldown,0.2,float,秒；Celeste DashCooldown
+Dash,dash_refill_cooldown,0.1,float,秒；Celeste DashRefillCooldown；落地补 dash 的冷却，Extended Dash 的来源
+Dash,dash_attack_time,0.3,float,秒；Celeste DashAttackTime
+Dash,dash_buffer_time,0.12,float,秒；K 输入缓存
+Dash,super_jump_speed,260,float,px/s；Celeste SuperJumpH
+Dash,dodge_slide_speed_mult,1.2,float,Celeste DodgeSlideSpeedMult；斜下 Dash 触地提速
+Dash,duck_super_jump_x_mult,1.25,float,Celeste DuckSuperJumpXMult；Hyper/Ultra 水平倍率
+Dash,duck_super_jump_y_mult,0.5,float,Celeste DuckSuperJumpYMult；Hyper/Ultra 纵向倍率
+Dash,super_wall_jump_speed,160,float,px/s 向上；Celeste SuperWallJumpSpeed
+Dash,super_wall_jump_horizontal,170,float,px/s；Celeste MaxRun+JumpHBoost*2
+Climb,max_stamina,110,float,Celeste ClimbMaxStamina；无单位
+Climb,climb_grab_y_mult,0.2,float,Celeste ClimbGrabYMult；抓墙纵速保留
+Climb,climb_no_move_time,0.1,float,秒；Celeste ClimbNoMoveTime
+Climb,climb_up_speed,45,float,px/s；Celeste ClimbUpSpeed
+Climb,climb_down_speed,80,float,px/s；Celeste ClimbDownSpeed
+Climb,climb_slip_speed,30,float,px/s；Celeste ClimbSlipSpeed
+Climb,climb_acceleration,900,float,px/s²；Celeste ClimbAccel
+Climb,climb_up_stamina_cost,45.45,float,每秒；Celeste ClimbUpCost 100/2.2
+Climb,climb_still_stamina_cost,10,float,每秒；Celeste ClimbStillCost 100/10
+Climb,climb_jump_stamina_cost,27.5,float,每次；Celeste ClimbJumpCost 110/4
+Climb,climb_check_distance,2,float,px；Celeste ClimbCheckDist；抓墙检测与贴墙吸附距离
+Climb,slip_check_depth,4,float,px；Celeste SlipCheck 的探针深度
+Climb,wall_check_distance,0.5,float,px；更严格的墙跳检测距离（原 Celeste 3，会导致隔半格墙跳）
+Climb,wall_jump_speed,130,float,px/s；Celeste WallJumpHSpeed = MaxRun+JumpHBoost
+Climb,climb_hop_x,100,float,px/s；Celeste ClimbHopX
+Climb,climb_hop_y,120,float,px/s 向上；Celeste ClimbHopY
+Climb,climb_hop_force_time,0.2,float,秒；Celeste ClimbHopForceTime，翻墙后水平输入被强制归零
+Climb,climb_jump_boost_time,0.2,float,秒；Celeste ClimbJumpBoostTime；中立爬墙跳后推离墙面可退还体力（Wallboost）的窗口
+Climb,wall_slide_start_max,20,float,px/s；Celeste WallSlideStartMax；贴墙下滑的初始下落上限
+Climb,wall_slide_time,1.2,float,秒；Celeste WallSlideTime；贴墙下滑摩擦从 20 衰减回 160 的时长
+Feel,corner_correction_px,4,int,px；Celeste UpwardCornerCorrection
+Feel,dash_corner_correction_px,4,int,px；Celeste DashCornerCorrection
+Feel,wall_jump_force_time,0.16,float,秒；Celeste WallJumpForceTime，墙跳后水平输入被强制推离墙
+Feel,super_wall_jump_force_time,0.2,float,秒；Celeste SuperWallJumpForceTime
+Feel,wall_speed_retention_time,0.06,float,秒；Celeste WallSpeedRetentionTime；撞墙水平速度保留窗口（Cornerboost）
+Carry,throw_speed,160,float,px/s
+Carry,throw_lift,120,float,px/s 向上
+Attack,attack_speed_threshold,240.0,float,px/s；速度超此值 is_attacking() 为真，不限 dash 期
+Damage,kill_plane_y,1000.0,float,px；玩家 y 超过此值即死亡重生（自定义场景按高度调）

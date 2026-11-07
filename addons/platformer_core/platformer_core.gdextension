@@ -1,0 +1,30 @@
+[configuration]
+
+entry_symbol = "platformer_core_library_init"
+compatibility_minimum = "4.2"
+reloadable = true
+
+[libraries]
+
+; Names come from SConstruct: <name><suffix><SHLIBSUFFIX>, with suffix built from
+; platform, target and arch. Depending on the godot-cpp version the target part is
+; either editor / template_debug / template_release or debug / release, so both
+; spellings are listed here; Godot only looks up the key it needs.
+
+windows.editor.x86_64 = "res://addons/platformer_core/bin/platformer_core.windows.editor.x86_64.dll"
+windows.template_debug.x86_64 = "res://addons/platformer_core/bin/platformer_core.windows.template_debug.x86_64.dll"
+windows.template_release.x86_64 = "res://addons/platformer_core/bin/platformer_core.windows.template_release.x86_64.dll"
+windows.debug.x86_64 = "res://addons/platformer_core/bin/platformer_core.windows.debug.x86_64.dll"
+windows.release.x86_64 = "res://addons/platformer_core/bin/platformer_core.windows.release.x86_64.dll"
+
+linux.editor.x86_64 = "res://addons/platformer_core/bin/libplatformer_core.linux.editor.x86_64.so"
+linux.template_debug.x86_64 = "res://addons/platformer_core/bin/libplatformer_core.linux.template_debug.x86_64.so"
+linux.template_release.x86_64 = "res://addons/platformer_core/bin/libplatformer_core.linux.template_release.x86_64.so"
+linux.debug.x86_64 = "res://addons/platformer_core/bin/libplatformer_core.linux.debug.x86_64.so"
+linux.release.x86_64 = "res://addons/platformer_core/bin/libplatformer_core.linux.release.x86_64.so"
+
+macos.editor = "res://addons/platformer_core/bin/libplatformer_core.macos.editor.framework"
+macos.template_debug = "res://addons/platformer_core/bin/libplatformer_core.macos.template_debug.framework"
+macos.template_release = "res://addons/platformer_core/bin/libplatformer_core.macos.template_release.framework"
+macos.debug = "res://addons/platformer_core/bin/libplatformer_core.macos.debug.framework"
+macos.release = "res://addons/platformer_core/bin/libplatformer_core.macos.release.framework"

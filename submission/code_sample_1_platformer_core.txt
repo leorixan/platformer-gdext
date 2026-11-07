@@ -1,0 +1,1201 @@
+================================================================================
+File: src/core/math2d.h
+================================================================================
+
+#pragma once
+
+#include <cmath>
+
+// Minimal 2D vector math. The simulation deliberately avoids engine types so the
+// exact same code runs inside Godot and inside a plain unit-test binary.
+namespace platformer {
+
+// Neutral element for float comparisons. The world unit is one pixel and positions
+// stay on the integer lattice, so this only ever absorbs float round-off.
+constexpr float kEpsilon = 1e-6f;
+
+struct Vec2 {
+	float x = 0.0f;
+	float y = 0.0f;
+
+	Vec2() = default;
+	Vec2(float p_x, float p_y) : x(p_x), y(p_y) {}
+
+	Vec2 operator+(const Vec2 &p_other) const { return Vec2(x + p_other.x, y + p_other.y); }
+	Vec2 operator-(const Vec2 &p_other) const { return Vec2(x - p_other.x, y - p_other.y); }
+	Vec2 operator*(float p_scale) const { return Vec2(x * p_scale, y * p_scale); }
+	Vec2 operator-() const { return Vec2(-x, -y); }
+	Vec2 &operator+=(const Vec2 &p_other) {
+		x += p_other.x;
+		y += p_other.y;
+		return *this;
+	}
+	Vec2 &operator-=(const Vec2 &p_other) {
+		x -= p_other.x;
+		y -= p_other.y;
+		return *this;
+	}
+	bool operator==(const Vec2 &p_other) const { return x == p_other.x && y == p_other.y; }
+	bool operator!=(const Vec2 &p_other) const { return !(*this == p_other); }
+
+	float length() const { return std::sqrt(x * x + y * y); }
+
+	Vec2 normalized() const {
+		const float len = length();
+		return len > kEpsilon ? Vec2(x / len, y / len) : Vec2();
+	}
+};
+
+inline float signf(float p_value) {
+	return p_value > 0.0f ? 1.0f : (p_value < 0.0f ? -1.0f : 0.0f);
+}
+
+// Godot's move_toward / Celeste's Calc.Approach. The reference relies on the
+// "speed up *and* slow down" behaviour: a falling cap that drops has to be able to
+// pull the current speed down with it, which is what fastfall is.
+inline float approach(float p_from, float p_to, float p_delta) {
+	if (std::fabs(p_to - p_from) <= p_delta) {
+		return p_to;
+	}
+	return p_from + signf(p_to - p_from) * p_delta;
+}
+
+} // namespace platformer
+
+
+================================================================================
+File: src/core/collision_query.h
+================================================================================
+
+#pragma once
+
+#include "math2d.h"
+
+namespace platformer {
+
+// Everything the simulation is allowed to know about the world. It is the only
+// engine-facing dependency of the core, and it is inverted: the core calls the
+// engine (Godot's physics server) and the test binary (a plain tile grid) through
+// the exact same function, so one simulation serves both.
+//
+// Contract: `overlaps_box` returns true if and only if the two boxes share a
+// *positive* area, measured in pixels. Touching edges do not count as a hit. This is
+// the whole reason the port dropped the two epsilon patches the GDScript version had
+// accumulated: there, an 8px-wide body could not pass an 8px gap because the engine
+// rejects zero-clearance motion, so the collider had to be shrunk before every query
+// and wall snapping needed a margin of its own. Here the convention is stated once,
+// in the interface, and every implementation honours it; the collider is never
+// mutated, and a body fits through a gap exactly its own width.
+//
+// Implementations must agree with it to within kContactEpsilon of the boundary.
+constexpr float kContactEpsilon = 1e-4f;
+
+class CollisionQuery {
+public:
+	virtual ~CollisionQuery() = default;
+
+	// Solid material overlapping the axis-aligned box [p_min, p_max]?
+	virtual bool overlaps_box(const Vec2 &p_min, const Vec2 &p_max) const = 0;
+};
+
+} // namespace platformer
+
+
+================================================================================
+File: src/core/player_config.h
+================================================================================
+
+#pragma once
+
+namespace platformer {
+
+// Every tunable of the controller, grouped by the subsystem that reads it. The
+// values are the reference implementation's own numbers, unscaled: 1 brick = 8px,
+// standing box 8x11, ducking box 8x6. The trailing comment on each field is the
+// name of the constant it was taken from, so a value can always be traced back to
+// the behaviour it came from.
+struct PlayerConfig {
+	struct Body {
+		float width = 8.0f; // normalHitbox width
+		float stand_height = 11.0f; // normalHitbox height
+		float duck_height = 6.0f; // duckHitbox height
+	} body;
+
+	struct Movement {
+		float max_speed = 90.0f; // MaxRun
+		float acceleration = 1000.0f; // RunAccel
+		float over_speed_decel = 400.0f; // RunReduce: decay while above MaxRun and still pushing
+		float air_accel_mult = 0.65f; // AirMult
+		float duck_friction = 500.0f; // DuckFriction
+		int duck_correct_check = 4; // DuckCorrectCheck: sideways probe range, px
+		float duck_correct_slide = 50.0f; // DuckCorrectSlide: px/s
+	} movement;
+
+	struct Jump {
+		float speed = 105.0f; // JumpSpeed
+		float speed_boost = 40.0f; // JumpHBoost
+		float var_time = 0.20f; // VarJumpTime: how long holding jump keeps the launch speed
+		float coyote_time = 0.10f; // JumpGraceTime
+		float buffer_time = 0.12f; // jump input buffer (reference: 0.08)
+		float ceiling_var_jump_grace = 0.05f; // CeilingVarJumpGrace
+	} jump;
+
+	struct Gravity {
+		float accel = 900.0f; // gravity
+		float max_fall = 160.0f; // MaxFall
+		float fast_max_fall = 240.0f; // FastMaxFall: cap while holding down
+		float fast_max_accel = 300.0f; // FastMaxAccel: how fast the cap itself moves
+		float half_threshold = 40.0f; // HalfGravThreshold: apex hang while holding jump
+	} gravity;
+
+	struct Dash {
+		int max_count = 1;
+		float speed = 240.0f; // DashSpeed
+		float end_speed = 160.0f; // EndDashSpeed, only written when the aim is not downward
+		float end_up_mult = 0.75f; // EndDashUpMult
+		float duration = 0.15f; // DashTime
+		float freeze_time = 0.05f; // Celeste.Freeze in DashBegin; also the Super/Hyper input window
+		float cooldown = 0.20f; // DashCooldown
+		float refill_cooldown = 0.10f; // DashRefillCooldown: source of extended dash
+		float attack_time = 0.30f; // DashAttackTime
+		float buffer_time = 0.12f; // dash input buffer
+		float super_jump_speed = 260.0f; // SuperJumpH
+		float dodge_slide_mult = 1.2f; // DodgeSlideSpeedMult
+		float duck_super_x_mult = 1.25f; // DuckSuperJumpXMult
+		float duck_super_y_mult = 0.5f; // DuckSuperJumpYMult
+		float attack_speed_threshold = 240.0f; // is_attacking() speed gate
+	} dash;
+
+	struct Wall {
+		float jump_speed = 130.0f; // WallJumpHSpeed = MaxRun + JumpHBoost
+		float check_distance = 3.0f; // WallJumpCheckDist
+		float jump_force_time = 0.16f; // WallJumpForceTime
+		float super_speed = 160.0f; // SuperWallJumpSpeed
+		float super_horizontal = 170.0f; // SuperWallJumpH = MaxRun + JumpHBoost * 2
+		float super_force_time = 0.20f; // SuperWallJumpForceTime
+	} wall;
+
+	struct Feel {
+		int corner_correction_px = 4; // UpwardCornerCorrection
+		int dash_corner_correction_px = 4; // DashCornerCorrection
+	} feel;
+
+	// Height of the body box for the current stance. The feet are the origin, so
+	// switching stance never displaces the player.
+	float body_height(bool p_ducking) const {
+		return p_ducking ? body.duck_height : body.stand_height;
+	}
+};
+
+} // namespace platformer
+
+
+================================================================================
+File: src/core/player_core.h
+================================================================================
+
+#pragma once
+
+#include "collision_query.h"
+#include "player_config.h"
+
+namespace platformer {
+
+// The reference implementation's state machine is just an enum plus a switch, and
+// the player object is the single owner of the simulation. Kept identical here: no
+// node tree, no state objects, exactly one place that writes velocity.
+enum class Mode {
+	kNormal,
+	kDash,
+};
+
+// Named techniques, reported so a test or a debug overlay can see which mechanic a
+// frame produced instead of guessing it from the velocity.
+enum class Technique {
+	kNone,
+	kJump,
+	kSuper,
+	kHyper,
+	kUltra,
+	kWallJump,
+	kSuperWallJump,
+	kDash,
+	kDashSlide,
+	kDashEnd,
+	kCornerCorrect,
+	kDashCorner,
+};
+
+const char *technique_name(Technique p_technique);
+const char *mode_name(Mode p_mode);
+
+// One fixed step of sampled input. Edge flags are true only on the step where the
+// button went down; held flags mirror the key state.
+struct InputFrame {
+	float move_x = 0.0f; // -1 / 0 / +1
+	float move_y = 0.0f; // -1 up, +1 down
+	bool jump_pressed = false;
+	bool dash_pressed = false;
+	bool jump_held = false;
+};
+
+// The whole character controller, with no engine dependency beyond CollisionQuery.
+//
+// Frame order is fixed and matches the GDScript version this was ported from:
+//
+//   1. sample input          (buffers, forceMoveX)
+//   2. tick timers           (freeze gates everything below it)
+//   3. update facing
+//   4. mode update           (movement / gravity / jump decisions)
+//   5. move                  (one pass, one pixel at a time)
+//   6. resolve collisions    (landing, corner correction, dash slide)
+//
+// Nothing outside step 5 touches position, and nothing outside step 4 touches
+// velocity, which is what makes the derived techniques reproducible.
+class PlayerCore {
+public:
+	PlayerCore(const PlayerConfig &p_config, CollisionQuery *p_query);
+
+	// Places the player and restores the state it starts a life with.
+	void reset(const Vec2 &p_position, float p_facing = 1.0f);
+
+	// Tuning is owned by value, so a caller can reload it at runtime without
+	// worrying about who keeps the old one alive.
+	const PlayerConfig &config() const { return config_; }
+	void set_config(const PlayerConfig &p_config) { config_ = p_config; }
+
+	// Event-driven capture. Call these from the input callback so a press shorter
+	// than one physics step is never dropped; InputFrame::*_pressed feeds the same
+	// buffers, so a headless driver works without synthesising events.
+	void press_jump();
+	void press_dash();
+
+	// Advances the simulation by one fixed step.
+	void step(const InputFrame &p_input, float p_dt);
+
+	Vec2 position() const { return position_; }
+	Vec2 velocity() const { return velocity_; }
+	Mode mode() const { return mode_; }
+	float facing() const { return facing_; }
+	bool ducking() const { return ducking_; }
+	int dash_count() const { return dash_count_; }
+	Vec2 dash_dir() const { return dash_dir_; }
+	bool dash_started_on_ground() const { return dash_started_on_ground_; }
+	Technique last_technique() const { return last_technique_; }
+
+	// Aim of a dash started this frame: raw input, falling back to facing. Raw on
+	// purpose -- forceMoveX must not steer a dash.
+	Vec2 dash_direction_from_input() const;
+
+	// Wall on either side within WallJumpCheckDist, right side first. 0 if none.
+	int wall_direction() const;
+
+	// Break/damage gate: a dash attack window is open, or the body is fast enough.
+	bool is_attacking() const;
+
+	// Would shifting the whole body by this vector put it inside solid? The
+	// reference's CollideCheck<Solid>(Position + offset), and the probe the wall
+	// rules are written in terms of -- a debug overlay wants it too.
+	bool test_move(const Vec2 &p_motion) const;
+
+private:
+	// Frame stages, in the order listed above.
+	void poll_input(const InputFrame &p_input, float p_dt);
+	void tick_timers(float p_dt);
+	void update_facing();
+	void normal_update(float p_dt);
+	void dash_update();
+	void move(float p_dt);
+	void resolve_collisions();
+
+	// Mode updates.
+	void update_ducking(float p_dt);
+	void apply_horizontal(float p_dt);
+	void apply_gravity(float p_dt);
+	void try_jump();
+	void jump_off_wall(int p_wall);
+	bool try_dash_wall_jump();
+	bool try_start_dash();
+	void launch_dash();
+	void finish_dash();
+	void dash_slide();
+	void upward_corner_correction();
+	bool dash_corner_correction();
+
+	// Fills p_out with the directions a corner correction may search, travel
+	// direction first, and returns how many were written (1 or 2).
+	int correction_directions(int p_out[2]) const;
+
+	// Jumps.
+	void jump();
+	void super_jump();
+	void wall_jump(int p_direction, bool p_super_wall);
+	void consume_jump();
+
+	// Queries against the injected world. All of them take the body origin -- the
+	// bottom centre of the box -- and are exact: no margin, no shape mutation.
+	bool box_is_solid_at(const Vec2 &p_at, float p_height) const;
+	bool box_is_solid(const Vec2 &p_at) const;
+	bool box_fits_at(const Vec2 &p_at) const;
+
+	// Ground contact is a geometric probe, not the engine's "did I land this step"
+	// flag: a horizontal dash or a dash slide has no downward motion at all, so a
+	// contact flag reads false and dash count and coyote time would never be refilled.
+	bool on_ground() const;
+	bool can_unduck() const;
+	bool can_unduck_at(const Vec2 &p_at) const;
+
+	// Movement. Positions stay on the integer lattice: the leftover of every move is
+	// carried in an accumulator and consumed one whole pixel at a time, which is what
+	// the reference does (MoveHExact / MoveVExact) and what makes exact geometry
+	// sufficient for the probes.
+	int advance(float &p_counter, float p_amount) const;
+	bool move_x_exact(int p_steps, bool p_body_move);
+	bool move_y_exact(int p_steps, bool p_body_move);
+	void slide_h(float p_amount);
+
+	void set_duck(bool p_ducking);
+	float body_height() const { return config_.body_height(ducking_); }
+	void set_technique(Technique p_technique) { last_technique_ = p_technique; }
+
+	PlayerConfig config_;
+	CollisionQuery *query_;
+
+	// --- simulation state ---
+	Vec2 position_;
+	Vec2 velocity_;
+	Vec2 pre_move_velocity_; // velocity as it was before the move, for the corrections
+	float counter_x_ = 0.0f;
+	float counter_y_ = 0.0f;
+	Mode mode_ = Mode::kNormal;
+	int dash_count_ = 1;
+	float facing_ = 1.0f;
+	bool ducking_ = false;
+
+	// --- sampled input ---
+	float raw_move_x_ = 0.0f;
+	float move_x_ = 0.0f; // raw_move_x_ after the forceMoveX override
+	float move_y_ = 0.0f;
+	bool jump_held_ = false;
+	float force_move_x_ = 0.0f;
+	float force_move_x_timer_ = 0.0f;
+
+	// --- timers ---
+	float jump_buffer_ = 0.0f;
+	float dash_buffer_ = 0.0f;
+	float dash_freeze_ = 0.0f;
+	float dash_timer_ = 0.0f;
+	float dash_cooldown_timer_ = 0.0f;
+	float dash_refill_cooldown_timer_ = 0.0f;
+	float dash_attack_timer_ = 0.0f;
+	float coyote_ = 0.0f;
+	float var_jump_timer_ = 0.0f;
+	float var_jump_speed_ = 0.0f;
+	float max_fall_ = 160.0f; // current cap, approaches FastMaxFall while down is held
+
+	// --- dash state ---
+	Vec2 dash_dir_; // (0,0) until the freeze ends, then sampled and never recomputed
+	bool dash_started_on_ground_ = false;
+	Vec2 before_dash_speed_;
+
+	// --- contact facts of the last move ---
+	bool on_ceiling_ = false;
+	bool floor_last_frame_ = false;
+
+	Technique last_technique_ = Technique::kNone;
+};
+
+} // namespace platformer
+
+
+================================================================================
+File: src/core/player_core.cpp
+================================================================================
+
+#include "player_core.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace platformer {
+
+const char *technique_name(Technique p_technique) {
+	switch (p_technique) {
+		case Technique::kJump: return "Jump";
+		case Technique::kSuper: return "Super";
+		case Technique::kHyper: return "Hyper";
+		case Technique::kUltra: return "Ultra";
+		case Technique::kWallJump: return "WallJump";
+		case Technique::kSuperWallJump: return "SuperWallJump";
+		case Technique::kDash: return "Dash";
+		case Technique::kDashSlide: return "DashSlide";
+		case Technique::kDashEnd: return "DashEnd";
+		case Technique::kCornerCorrect: return "CornerCorrect";
+		case Technique::kDashCorner: return "DashCorner";
+		default: return "None";
+	}
+}
+
+const char *mode_name(Mode p_mode) {
+	return p_mode == Mode::kDash ? "DASH" : "NORMAL";
+}
+
+PlayerCore::PlayerCore(const PlayerConfig &p_config, CollisionQuery *p_query) :
+		config_(p_config), query_(p_query) {
+	reset(Vec2());
+}
+
+void PlayerCore::reset(const Vec2 &p_position, float p_facing) {
+	position_ = p_position;
+	velocity_ = Vec2();
+	pre_move_velocity_ = Vec2();
+	counter_x_ = 0.0f;
+	counter_y_ = 0.0f;
+	mode_ = Mode::kNormal;
+	dash_count_ = config_.dash.max_count;
+	facing_ = p_facing >= 0.0f ? 1.0f : -1.0f;
+	ducking_ = false;
+
+	raw_move_x_ = 0.0f;
+	move_x_ = 0.0f;
+	move_y_ = 0.0f;
+	jump_held_ = false;
+	force_move_x_ = 0.0f;
+	force_move_x_timer_ = 0.0f;
+
+	jump_buffer_ = 0.0f;
+	dash_buffer_ = 0.0f;
+	dash_freeze_ = 0.0f;
+	dash_timer_ = 0.0f;
+	dash_cooldown_timer_ = 0.0f;
+	dash_refill_cooldown_timer_ = 0.0f;
+	dash_attack_timer_ = 0.0f;
+	coyote_ = 0.0f;
+	var_jump_timer_ = 0.0f;
+	var_jump_speed_ = 0.0f;
+	max_fall_ = config_.gravity.max_fall;
+
+	dash_dir_ = Vec2();
+	dash_started_on_ground_ = false;
+	before_dash_speed_ = Vec2();
+	on_ceiling_ = false;
+	floor_last_frame_ = on_ground();
+	last_technique_ = Technique::kNone;
+}
+
+void PlayerCore::press_jump() {
+	jump_buffer_ = config_.jump.buffer_time;
+}
+
+void PlayerCore::press_dash() {
+	dash_buffer_ = config_.dash.buffer_time;
+}
+
+void PlayerCore::step(const InputFrame &p_input, float p_dt) {
+	poll_input(p_input, p_dt);
+	tick_timers(p_dt);
+	update_facing();
+	if (mode_ == Mode::kDash) {
+		dash_update();
+	} else {
+		normal_update(p_dt);
+	}
+	pre_move_velocity_ = velocity_;
+	on_ceiling_ = false;
+	move(p_dt);
+	resolve_collisions();
+}
+
+void PlayerCore::poll_input(const InputFrame &p_input, float p_dt) {
+	if (p_input.jump_pressed) {
+		jump_buffer_ = config_.jump.buffer_time;
+	}
+	if (p_input.dash_pressed) {
+		dash_buffer_ = config_.dash.buffer_time;
+	}
+	raw_move_x_ = p_input.move_x;
+	move_y_ = p_input.move_y;
+	jump_held_ = p_input.jump_held;
+
+	// forceMoveX: for a moment after a wall jump the horizontal input is overridden,
+	// so the player cannot be yanked straight back into the wall they just left.
+	// Everything downstream reads move_x_, never the raw axis.
+	if (force_move_x_timer_ > 0.0f) {
+		force_move_x_timer_ = std::max(0.0f, force_move_x_timer_ - p_dt);
+		move_x_ = force_move_x_;
+	} else {
+		move_x_ = raw_move_x_;
+	}
+}
+
+void PlayerCore::tick_timers(float p_dt) {
+	// The buffers keep running while frozen, so a jump pressed during the dash freeze
+	// still comes out on the frame the freeze ends.
+	jump_buffer_ = std::max(0.0f, jump_buffer_ - p_dt);
+	dash_buffer_ = std::max(0.0f, dash_buffer_ - p_dt);
+
+	// Celeste.Freeze: while frozen only input runs, every game timer stops.
+	if (dash_freeze_ > 0.0f) {
+		dash_freeze_ = std::max(0.0f, dash_freeze_ - p_dt);
+		return;
+	}
+	coyote_ = std::max(0.0f, coyote_ - p_dt);
+	var_jump_timer_ = std::max(0.0f, var_jump_timer_ - p_dt);
+	dash_attack_timer_ = std::max(0.0f, dash_attack_timer_ - p_dt);
+	dash_cooldown_timer_ = std::max(0.0f, dash_cooldown_timer_ - p_dt);
+	dash_refill_cooldown_timer_ = std::max(0.0f, dash_refill_cooldown_timer_ - p_dt);
+	if (mode_ == Mode::kDash) {
+		dash_timer_ = std::max(0.0f, dash_timer_ - p_dt);
+	}
+
+	// Falling with headroom: stand back up without waiting for anything.
+	if (ducking_ && velocity_.y > 0.0f && !on_ground() && can_unduck()) {
+		set_duck(false);
+	}
+}
+
+void PlayerCore::update_facing() {
+	// A dash tracks the input too: that is the only reason a reverse Super or a
+	// reverse Hyper can be aimed mid-dash.
+	if (move_x_ != 0.0f) {
+		facing_ = move_x_;
+	}
+}
+
+void PlayerCore::normal_update(float p_dt) {
+	// A dash taken this frame replaces the whole normal update, it does not run
+	// alongside it.
+	if (try_start_dash()) {
+		return;
+	}
+	update_ducking(p_dt);
+	apply_horizontal(p_dt);
+	apply_gravity(p_dt);
+	// Jump last: the launch speed is written after ground friction has had its turn,
+	// so a bunny hop keeps the momentum it landed with.
+	try_jump();
+}
+
+void PlayerCore::update_ducking(float p_dt) {
+	if (ducking_) {
+		if (!on_ground() || move_y_ > 0.0f) {
+			return;
+		}
+		if (can_unduck()) {
+			set_duck(false);
+			return;
+		}
+		if (velocity_.x != 0.0f) {
+			return;
+		}
+		// Stuck under a ceiling and standing still: shuffle sideways towards the
+		// first spot with headroom.
+		for (int i = config_.movement.duck_correct_check; i > 0; --i) {
+			if (can_unduck_at(position_ + Vec2(static_cast<float>(i), 0.0f))) {
+				slide_h(config_.movement.duck_correct_slide * p_dt);
+				return;
+			}
+			if (can_unduck_at(position_ - Vec2(static_cast<float>(i), 0.0f))) {
+				slide_h(-config_.movement.duck_correct_slide * p_dt);
+				return;
+			}
+		}
+	} else if (on_ground() && move_y_ > 0.0f && velocity_.y >= 0.0f) {
+		set_duck(true);
+	}
+}
+
+void PlayerCore::apply_horizontal(float p_dt) {
+	const bool grounded = on_ground();
+	if (ducking_ && grounded) {
+		velocity_.x = approach(velocity_.x, 0.0f, config_.movement.duck_friction * p_dt);
+		return;
+	}
+
+	float mult = 1.0f;
+	if (!grounded) {
+		mult = config_.movement.air_accel_mult;
+	}
+
+	// Above the run cap and still pushing: bleed off with RunReduce instead of
+	// accelerating, so a Super or a Hyper decays rather than being clipped.
+	float rate = config_.movement.acceleration;
+	const bool over_the_cap = std::fabs(velocity_.x) > config_.movement.max_speed;
+	const bool still_pushing = signf(velocity_.x) == signf(move_x_);
+	if (over_the_cap && still_pushing) {
+		rate = config_.movement.over_speed_decel;
+	}
+	velocity_.x = approach(velocity_.x, config_.movement.max_speed * move_x_, rate * mult * p_dt);
+}
+
+void PlayerCore::apply_gravity(float p_dt) {
+	// Holding down past MaxFall drifts the cap towards FastMaxFall rather than
+	// snapping to it, so fastfall has a ramp instead of a step.
+	float target_max_fall = config_.gravity.max_fall;
+	if (move_y_ > 0.0f && velocity_.y >= config_.gravity.max_fall) {
+		target_max_fall = config_.gravity.fast_max_fall;
+	}
+	max_fall_ = approach(max_fall_, target_max_fall, config_.gravity.fast_max_accel * p_dt);
+
+	if (!on_ground()) {
+		// Near the top of the arc with jump still held, gravity is halved: the extra
+		// hang time is what makes the apex feel controllable.
+		float mult = 1.0f;
+		const bool near_the_apex = std::fabs(velocity_.y) < config_.gravity.half_threshold;
+		if (near_the_apex && jump_held_) {
+			mult = 0.5f;
+		}
+		velocity_.y = approach(velocity_.y, max_fall_, config_.gravity.accel * mult * p_dt);
+	}
+
+	// Variable jump height: hold the launch speed while jump is held and drop it the
+	// instant it is released. This, not a cut multiplier, is where jump height comes
+	// from -- which is also why the same rule shortens a wall jump.
+	if (var_jump_timer_ > 0.0f) {
+		if (jump_held_) {
+			velocity_.y = std::min(velocity_.y, var_jump_speed_);
+		} else {
+			var_jump_timer_ = 0.0f;
+		}
+	}
+}
+
+void PlayerCore::try_jump() {
+	if (jump_buffer_ <= 0.0f) {
+		return;
+	}
+	if (coyote_ > 0.0f) {
+		jump();
+		return;
+	}
+	// A wall jump needs room to stand up, otherwise the body would be shoved into the
+	// ceiling it is ducked under. Right side checked first, like the reference.
+	if (!can_unduck()) {
+		return;
+	}
+	if (wall_direction() == 1) {
+		jump_off_wall(1);
+	} else if (wall_direction() == -1) {
+		jump_off_wall(-1);
+	}
+}
+
+void PlayerCore::jump_off_wall(int p_wall) {
+	// A dash attack that was aimed straight up turns a wall hit into a super wall
+	// jump; everything else is a plain wall jump.
+	if (dash_attack_timer_ > 0.0f && dash_dir_.x == 0.0f && dash_dir_.y < 0.0f) {
+		wall_jump(-p_wall, true);
+	} else {
+		wall_jump(-p_wall, false);
+	}
+}
+
+void PlayerCore::jump() {
+	consume_jump();
+	set_duck(false);
+	velocity_.y = -config_.jump.speed;
+	velocity_.x += config_.jump.speed_boost * move_x_;
+	var_jump_speed_ = velocity_.y;
+	set_technique(Technique::kJump);
+}
+
+void PlayerCore::super_jump() {
+	consume_jump();
+	velocity_.x = config_.dash.super_jump_speed * facing_;
+	velocity_.y = -config_.jump.speed;
+	// Ducking is the entire difference between a Super and a Hyper or an Ultra.
+	if (ducking_) {
+		set_duck(false);
+		velocity_.x *= config_.dash.duck_super_x_mult;
+		velocity_.y *= config_.dash.duck_super_y_mult;
+		set_technique(dash_started_on_ground_ ? Technique::kHyper : Technique::kUltra);
+	} else {
+		set_technique(Technique::kSuper);
+	}
+	var_jump_speed_ = velocity_.y;
+	mode_ = Mode::kNormal;
+}
+
+void PlayerCore::wall_jump(int p_direction, bool p_super_wall) {
+	consume_jump();
+	set_duck(false);
+	if (p_super_wall) {
+		velocity_.x = config_.wall.super_horizontal * p_direction;
+		velocity_.y = -config_.wall.super_speed;
+	} else {
+		velocity_.x = config_.wall.jump_speed * p_direction;
+		velocity_.y = -config_.jump.speed;
+	}
+	var_jump_speed_ = velocity_.y;
+	facing_ = static_cast<float>(p_direction);
+	// Take over the horizontal input for a moment, otherwise the player is pulled
+	// back onto the wall they just pushed off.
+	if (move_x_ != 0.0f) {
+		force_move_x_ = static_cast<float>(p_direction);
+		force_move_x_timer_ = p_super_wall ? config_.wall.super_force_time : config_.wall.jump_force_time;
+	}
+	set_technique(p_super_wall ? Technique::kSuperWallJump : Technique::kWallJump);
+	mode_ = Mode::kNormal;
+}
+
+void PlayerCore::consume_jump() {
+	jump_buffer_ = 0.0f;
+	coyote_ = 0.0f;
+	dash_attack_timer_ = 0.0f;
+	var_jump_timer_ = config_.jump.var_time;
+}
+
+bool PlayerCore::try_start_dash() {
+	if (dash_buffer_ <= 0.0f || dash_count_ <= 0 || dash_cooldown_timer_ > 0.0f) {
+		return false;
+	}
+	dash_buffer_ = 0.0f;
+	dash_count_ -= 1;
+	// Grounded is sampled here, from the geometric probe only -- adding coyote time
+	// would misread "ran off a ledge then dashed down" as a Hyper, and would disable
+	// the dash corner correction that is reserved for airborne dashes.
+	dash_started_on_ground_ = on_ground();
+	before_dash_speed_ = velocity_;
+	dash_dir_ = Vec2();
+	velocity_ = Vec2();
+	dash_timer_ = config_.dash.duration;
+	dash_cooldown_timer_ = config_.dash.cooldown;
+	dash_attack_timer_ = config_.dash.attack_time;
+	dash_freeze_ = config_.dash.freeze_time;
+	dash_refill_cooldown_timer_ = config_.dash.refill_cooldown;
+	mode_ = Mode::kDash;
+	if (!on_ground() && can_unduck()) {
+		set_duck(false);
+	}
+	set_technique(Technique::kDash);
+	return true;
+}
+
+void PlayerCore::dash_update() {
+	// DashBegin freezes the game for a few frames with the body parked. Only input
+	// keeps running, which is what gives the aim a chance to arrive late.
+	if (dash_freeze_ > 0.0f) {
+		velocity_ = Vec2();
+		return;
+	}
+	// Direction is sampled after the freeze, so a direction pressed on the same frame
+	// as the dash key -- or a frame or two later -- still lands correctly.
+	if (dash_dir_.x == 0.0f && dash_dir_.y == 0.0f) {
+		launch_dash();
+	}
+	if (jump_buffer_ <= 0.0f) {
+		return;
+	}
+	if (dash_dir_.y == 0.0f && coyote_ > 0.0f) {
+		super_jump();
+		return;
+	}
+	try_dash_wall_jump();
+}
+
+bool PlayerCore::try_dash_wall_jump() {
+	// A dash that only goes up turns a wall hit into a super wall jump.
+	const bool super_wall = dash_dir_.x == 0.0f && dash_dir_.y < 0.0f;
+	const int wall = wall_direction();
+	if (wall == 0) {
+		return false;
+	}
+	wall_jump(-wall, super_wall);
+	return true;
+}
+
+void PlayerCore::launch_dash() {
+	// The dash writes its velocity exactly once. Recomputing it every frame would
+	// erase the dash slide speed-up the moment it is applied.
+	dash_dir_ = dash_direction_from_input();
+	Vec2 new_speed = dash_dir_ * config_.dash.speed;
+	// Same direction and already faster: keep the old horizontal speed, never slow
+	// down into a dash. This is what lets a Super be chained out of a run.
+	const bool same_direction = signf(before_dash_speed_.x) == signf(new_speed.x);
+	const bool already_faster = std::fabs(before_dash_speed_.x) > std::fabs(new_speed.x);
+	if (same_direction && already_faster) {
+		new_speed.x = before_dash_speed_.x;
+	}
+	velocity_ = new_speed;
+	if (dash_dir_.x != 0.0f) {
+		facing_ = signf(dash_dir_.x);
+	}
+	if (on_ground() && dash_dir_.x != 0.0f && dash_dir_.y > 0.0f && velocity_.y > 0.0f) {
+		dash_slide();
+	}
+}
+
+void PlayerCore::dash_slide() {
+	// A down-diagonal dash that reaches the ground becomes a horizontal one and
+	// speeds up. The horizontal speed is never cleared, which is why the slide
+	// carries through the end of the dash.
+	dash_dir_ = Vec2(signf(dash_dir_.x), 0.0f);
+	velocity_.y = 0.0f;
+	velocity_.x *= config_.dash.dodge_slide_mult;
+	set_duck(true);
+	set_technique(Technique::kDashSlide);
+}
+
+void PlayerCore::finish_dash() {
+	// Only a dash that was not heading down rewrites the speed; a down dash that slid
+	// already converted its direction to horizontal and keeps its momentum.
+	if (dash_dir_.y <= 0.0f) {
+		velocity_ = dash_dir_ * config_.dash.end_speed;
+	}
+	if (velocity_.y < 0.0f) {
+		velocity_.y *= config_.dash.end_up_mult;
+	}
+	mode_ = Mode::kNormal;
+	set_technique(Technique::kDashEnd);
+}
+
+int PlayerCore::advance(float &p_counter, float p_amount) const {
+	// The reference moves in whole pixels and carries the remainder, which keeps the
+	// body on the integer lattice. That matters more here than it does there: the
+	// probes are exact, so a body resting at x.5 against a wall would read as
+	// overlapping it.
+	p_counter += p_amount;
+	const int steps = static_cast<int>(std::lround(p_counter));
+	p_counter -= static_cast<float>(steps);
+	return steps;
+}
+
+bool PlayerCore::move_x_exact(int p_steps, bool p_body_move) {
+	if (p_steps == 0) {
+		return false;
+	}
+	const int direction = p_steps > 0 ? 1 : -1;
+	const int count = p_steps > 0 ? p_steps : -p_steps;
+	for (int i = 0; i < count; ++i) {
+		if (box_is_solid(position_ + Vec2(static_cast<float>(direction), 0.0f))) {
+			if (p_body_move) {
+				velocity_.x = 0.0f;
+			}
+			return true;
+		}
+		position_.x += static_cast<float>(direction);
+	}
+	return false;
+}
+
+bool PlayerCore::move_y_exact(int p_steps, bool p_body_move) {
+	if (p_steps == 0) {
+		return false;
+	}
+	const int direction = p_steps > 0 ? 1 : -1;
+	const int count = p_steps > 0 ? p_steps : -p_steps;
+	for (int i = 0; i < count; ++i) {
+		if (box_is_solid(position_ + Vec2(0.0f, static_cast<float>(direction)))) {
+			if (p_body_move) {
+				velocity_.y = 0.0f;
+				if (direction < 0) {
+					on_ceiling_ = true;
+				}
+			}
+			return true;
+		}
+		position_.y += static_cast<float>(direction);
+	}
+	return false;
+}
+
+void PlayerCore::move(float p_dt) {
+	// X then Y, one pixel at a time, stopping at the first blocked pixel: the
+	// reference's MoveH / MoveV.
+	move_x_exact(advance(counter_x_, velocity_.x * p_dt), true);
+	move_y_exact(advance(counter_y_, velocity_.y * p_dt), true);
+}
+
+void PlayerCore::resolve_collisions() {
+	const bool grounded_probe = on_ground();
+	const bool landed = grounded_probe && !floor_last_frame_;
+	bool corrected = false;
+
+	if (pre_move_velocity_.y < 0.0f && on_ceiling_) {
+		upward_corner_correction();
+	} else if (landed && pre_move_velocity_.y > 0.0f && mode_ == Mode::kDash) {
+		// An airborne dash that clips the corner of a platform slides around it;
+		// failing that, hitting the ground mid-dash becomes a dash slide.
+		if (!dash_started_on_ground_ && dash_corner_correction()) {
+			corrected = true;
+		} else if (dash_dir_.x != 0.0f && dash_dir_.y > 0.0f) {
+			dash_slide();
+		}
+	}
+
+	const bool grounded = grounded_probe && !corrected;
+	if (grounded) {
+		coyote_ = config_.jump.coyote_time;
+		// Refilling a dash waits out DashRefillCooldown. Take off inside that window
+		// and the dash stays spent until the next landing -- that is extended dash.
+		if (dash_refill_cooldown_timer_ <= 0.0f) {
+			dash_count_ = config_.dash.max_count;
+		}
+	}
+	if (mode_ == Mode::kDash && dash_timer_ <= 0.0f) {
+		finish_dash();
+	}
+	floor_last_frame_ = grounded;
+}
+
+void PlayerCore::upward_corner_correction() {
+	// Rising into a ceiling: try shifting sideways by up to a few pixels, one pixel at
+	// a time, and take the first spot where the whole box fits one pixel higher. That
+	// last part is what lets a jump through a gap exactly body-wide work at all -- a
+	// swept test would clip the corners on both sides and always fail.
+	int directions[2];
+	const int direction_count = correction_directions(directions);
+	for (int d = 0; d < direction_count; ++d) {
+		for (int i = 1; i <= config_.feel.corner_correction_px; ++i) {
+			const Vec2 at = position_ + Vec2(static_cast<float>(directions[d] * i), -1.0f);
+			if (box_fits_at(at)) {
+				position_ = at;
+				velocity_.y = pre_move_velocity_.y;
+				set_technique(Technique::kCornerCorrect);
+				return;
+			}
+		}
+	}
+	// No room anywhere: the jump was cut short by a ceiling, so drop the remaining
+	// variable jump window unless it only just started.
+	if (var_jump_timer_ < config_.jump.var_time - config_.jump.ceiling_var_jump_grace) {
+		var_jump_timer_ = 0.0f;
+	}
+}
+
+int PlayerCore::correction_directions(int p_out[2]) const {
+	// Which ways a corner correction may search, travel direction first: going with
+	// the motion avoids shoving the player backwards through a wall they just passed.
+	// A player standing still (no horizontal speed at all) may search both ways,
+	// which is what the reference's two independent `if`s amount to.
+	int count = 0;
+	if (pre_move_velocity_.x <= 0.0f) {
+		p_out[count] = -1;
+		++count;
+	}
+	if (pre_move_velocity_.x >= 0.0f) {
+		p_out[count] = 1;
+		++count;
+	}
+	return count;
+}
+
+bool PlayerCore::dash_corner_correction() {
+	int directions[2];
+	const int direction_count = correction_directions(directions);
+	for (int d = 0; d < direction_count; ++d) {
+		for (int i = 1; i <= config_.feel.dash_corner_correction_px; ++i) {
+			const Vec2 at = position_ + Vec2(static_cast<float>(directions[d] * i), 1.0f);
+			if (box_fits_at(at)) {
+				position_ = at;
+				velocity_ = pre_move_velocity_;
+				set_technique(Technique::kDashCorner);
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool PlayerCore::box_is_solid_at(const Vec2 &p_at, float p_height) const {
+	const float half_width = config_.body.width * 0.5f;
+	return query_->overlaps_box(Vec2(p_at.x - half_width, p_at.y - p_height), Vec2(p_at.x + half_width, p_at.y));
+}
+
+bool PlayerCore::box_is_solid(const Vec2 &p_at) const {
+	return box_is_solid_at(p_at, body_height());
+}
+
+bool PlayerCore::box_fits_at(const Vec2 &p_at) const {
+	return !box_is_solid(p_at);
+}
+
+bool PlayerCore::test_move(const Vec2 &p_motion) const {
+	return box_is_solid(position_ + p_motion);
+}
+
+bool PlayerCore::on_ground() const {
+	if (velocity_.y < 0.0f) {
+		return false;
+	}
+	// Probe one pixel below the feet rather than asking the engine whether it landed
+	// this step. A horizontal dash or a dash slide has no downward motion at all, so a
+	// contact flag would read false and the dash refill and coyote time would never
+	// come back after a Super or a Hyper.
+	return box_is_solid(position_ + Vec2(0.0f, 1.0f));
+}
+
+bool PlayerCore::can_unduck() const {
+	return can_unduck_at(position_);
+}
+
+bool PlayerCore::can_unduck_at(const Vec2 &p_at) const {
+	if (!ducking_) {
+		return true;
+	}
+	// Same feet position, standing box: is there headroom?
+	return !box_is_solid_at(p_at, config_.body.stand_height);
+}
+
+void PlayerCore::set_duck(bool p_ducking) {
+	// The feet are the origin, so changing stance never displaces the player: the box
+	// simply grows or shrinks upward.
+	ducking_ = p_ducking;
+}
+
+void PlayerCore::slide_h(float p_amount) {
+	// DuckCorrectSlide is authored as a speed; it goes through the same pixel stepper
+	// so the position never leaves the lattice the probes rely on.
+	move_x_exact(advance(counter_x_, p_amount), false);
+}
+
+Vec2 PlayerCore::dash_direction_from_input() const {
+	// Raw input, bypassing forceMoveX: a wall jump must not be able to aim a dash.
+	const Vec2 direction(raw_move_x_, move_y_);
+	return direction != Vec2() ? direction.normalized() : Vec2(facing_, 0.0f);
+}
+
+int PlayerCore::wall_direction() const {
+	if (test_move(Vec2(config_.wall.check_distance, 0.0f))) {
+		return 1;
+	}
+	if (test_move(Vec2(-config_.wall.check_distance, 0.0f))) {
+		return -1;
+	}
+	return 0;
+}
+
+bool PlayerCore::is_attacking() const {
+	return dash_attack_timer_ > 0.0f || velocity_.length() >= config_.dash.attack_speed_threshold;
+}
+
+} // namespace platformer
+
+
+================================================================================
+File: src/core/tile_grid.h
+================================================================================
+
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "collision_query.h"
+
+namespace platformer {
+
+// Test-side collision world: a uniform grid of 8px tiles, the same brick size the
+// game uses. Broad phase is an index range derived directly from the query box, so
+// a probe is a handful of integer comparisons instead of a physics-server round
+// trip -- that is what lets the whole physics regression run in milliseconds with
+// no engine attached.
+//
+// Tile (col, row) covers x in [col * 8, col * 8 + 8), y in [row * 8, row * 8 + 8).
+// Screen convention: y grows downward, row 0 is the top.
+class TileGrid : public CollisionQuery {
+public:
+	static constexpr float kTileSize = 8.0f;
+
+	// ASCII map: '#' is solid, anything else is empty. Row 0 is the top row.
+	void load(const std::vector<std::string> &p_rows);
+
+	void set_solid(int p_col, int p_row, bool p_solid);
+	void fill_rect(int p_col0, int p_row0, int p_col1, int p_row1, bool p_solid = true);
+	bool is_solid(int p_col, int p_row) const;
+
+	int cols() const { return cols_; }
+	int rows() const { return rows_; }
+
+	bool overlaps_box(const Vec2 &p_min, const Vec2 &p_max) const override;
+
+private:
+	int cols_ = 0;
+	int rows_ = 0;
+	std::vector<uint8_t> solid_;
+};
+
+} // namespace platformer
+
+
+================================================================================
+File: src/core/tile_grid.cpp
+================================================================================
+
+#include "tile_grid.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace platformer {
+
+void TileGrid::load(const std::vector<std::string> &p_rows) {
+	rows_ = static_cast<int>(p_rows.size());
+	cols_ = 0;
+	for (int i = 0; i < static_cast<int>(p_rows.size()); ++i) {
+		cols_ = std::max(cols_, static_cast<int>(p_rows[static_cast<size_t>(i)].size()));
+	}
+	solid_.assign(static_cast<size_t>(cols_) * static_cast<size_t>(rows_), 0);
+	for (int row = 0; row < rows_; ++row) {
+		const std::string &line = p_rows[static_cast<size_t>(row)];
+		for (int col = 0; col < static_cast<int>(line.size()); ++col) {
+			solid_[static_cast<size_t>(row) * cols_ + col] = line[static_cast<size_t>(col)] == '#' ? 1 : 0;
+		}
+	}
+}
+
+void TileGrid::set_solid(int p_col, int p_row, bool p_solid) {
+	if (p_col < 0 || p_col >= cols_ || p_row < 0 || p_row >= rows_) {
+		return;
+	}
+	solid_[static_cast<size_t>(p_row) * cols_ + p_col] = p_solid ? 1 : 0;
+}
+
+void TileGrid::fill_rect(int p_col0, int p_row0, int p_col1, int p_row1, bool p_solid) {
+	for (int row = p_row0; row <= p_row1; ++row) {
+		for (int col = p_col0; col <= p_col1; ++col) {
+			set_solid(col, row, p_solid);
+		}
+	}
+}
+
+bool TileGrid::is_solid(int p_col, int p_row) const {
+	// Out of bounds is empty space, not an invisible wall: tests build the level
+	// they mean, and nothing stops a player from running off a ledge.
+	if (p_col < 0 || p_col >= cols_ || p_row < 0 || p_row >= rows_) {
+		return false;
+	}
+	return solid_[static_cast<size_t>(p_row) * cols_ + p_col] != 0;
+}
+
+bool TileGrid::overlaps_box(const Vec2 &p_min, const Vec2 &p_max) const {
+	if (p_max.x <= p_min.x || p_max.y <= p_min.y) {
+		return false;
+	}
+	// Any tile the box can reach: the one its low edge sits in, up to the one its
+	// high edge sits in. A high edge exactly on a boundary adds a tile whose
+	// overlap is zero, which the per-tile test below rejects.
+	const int col0 = static_cast<int>(std::floor(p_min.x / kTileSize));
+	const int col1 = static_cast<int>(std::floor(p_max.x / kTileSize));
+	const int row0 = static_cast<int>(std::floor(p_min.y / kTileSize));
+	const int row1 = static_cast<int>(std::floor(p_max.y / kTileSize));
+
+	for (int row = row0; row <= row1; ++row) {
+		for (int col = col0; col <= col1; ++col) {
+			if (!is_solid(col, row)) {
+				continue;
+			}
+			const float overlap_x = std::min(p_max.x, (col + 1) * kTileSize) - std::max(p_min.x, col * kTileSize);
+			const float overlap_y = std::min(p_max.y, (row + 1) * kTileSize) - std::max(p_min.y, row * kTileSize);
+			if (overlap_x > kContactEpsilon && overlap_y > kContactEpsilon) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+} // namespace platformer
+
+

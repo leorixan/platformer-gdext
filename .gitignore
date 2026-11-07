@@ -1,0 +1,31 @@
+# Build output
+bin/
+build/
+*.o
+*.obj
+*.dll
+*.dylib
+*.lib
+*.exp
+*.pdb
+*.exe
+*.so
+.sconsign.dblite
+__pycache__/
+*.pyc
+
+# Editor / IDE state for this Godot project
+.godot/
+.godot/imported/
+*.import.bak
+
+# The reference implementation this controller was measured against. It is publicly
+# readable for study but is not licensed for redistribution, so it never enters any
+# repository.
+reference/
+CelestePlayerReference.txt
+
+# Editors
+.vscode/
+.idea/
+*.swp
