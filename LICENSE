@@ -19,15 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party notice:
-
-- tests/third_party/doctest.h is doctest, MIT licensed,
-  https://github.com/doctest/doctest
-- The movement parameters and the frame order follow the publicly readable
-  player controller of Celeste (Maddy Thorson, Noel Berry; the C# reference
-  used here is Noel Berry's). Celeste is not open source. Its code is not
-  redistributed with this project, and the values are used as reference data
-  for study, with attribution.
